@@ -121,7 +121,7 @@ class AutoNav(Node):
         # self.occdata = np.uint8(oc2.reshape(msg.info.height,msg.info.width,order='F'))
         self.occdata = np.uint8(oc2.reshape(msg.info.height,msg.info.width))
         # print to file
-        # np.savetxt(mapfile, self.occdata)
+        np.savetxt(mapfile, self.occdata)
 
 
     def scan_callback(self, msg):
@@ -136,6 +136,7 @@ class AutoNav(Node):
 
     # function to rotate the TurtleBot
     def rotatebot(self, rot_angle):
+        print(rot_angle)
         # self.get_logger().info('In rotatebot')
         # create Twist object
         twist = Twist()
@@ -199,6 +200,7 @@ class AutoNav(Node):
             self.get_logger().info('No data!')
 
         # rotate to that direction
+        print(lr2i)
         self.rotatebot(float(lr2i))
 
         # start moving
@@ -232,6 +234,7 @@ class AutoNav(Node):
             self.pick_direction()
 
             while rclpy.ok():
+                #print("MOVING IN PROGRESS")
                 if self.laser_range.size != 0:
                     # check distances in front of TurtleBot and find values less
                     # than stop_distance
@@ -245,6 +248,7 @@ class AutoNav(Node):
                         # find direction with the largest distance from the Lidar
                         # rotate to that direction
                         # start moving
+                        print("-------HERE----------")
                         self.pick_direction()
                     
                 # allow the callback functions to run
@@ -263,6 +267,7 @@ def main(args=None):
     rclpy.init(args=args)
 
     auto_nav = AutoNav()
+    auto_nav.rotatebot(float(-45))
     auto_nav.mover()
 
     # create matplotlib figure
