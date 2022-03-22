@@ -14,6 +14,9 @@ import time
 #NFC imports
 from std_msgs.msg import Bool
 
+#Servo Imports
+from std_msgs.msg import Int8
+
 # constants
 rotatechange = 0.10
 speedchange = 0.18
@@ -57,6 +60,8 @@ class AutoNav(Node):
         # create publisher for moving TurtleBot
         self.publisher_ = self.create_publisher(Twist,'cmd_vel',10)
         # self.get_logger().info('Created publisher')
+        
+        self.publisher_servo = self.create_publisher(Int8, 'servo', 10)
         
         # create subscription to track orientation
         self.odom_subscription = self.create_subscription(
@@ -144,7 +149,7 @@ class AutoNav(Node):
 
 
     # function to rotate the TurtleBot
-    def rotatebot(self, rot_angle):
+    def rotatebot(self, rot_angle, modifier=1):
         self.get_logger().info('Angle to rotate is %f' % rot_angle)
         self.get_logger().info('In rotatebot')
         # create Twist object
@@ -169,7 +174,7 @@ class AutoNav(Node):
         # set linear speed to zero so the TurtleBot rotates on the spot
         twist.linear.x = 0.0
         # set the direction to rotate
-        twist.angular.z = c_change_dir * rotatechange
+        twist.angular.z = c_change_dir * rotatechange * modifier
         # start rotation
         self.publisher_.publish(twist)
 
@@ -223,11 +228,11 @@ class AutoNav(Node):
         self.start_move()
         
         
-    def start_move(self):
+    def start_move(self, modifier=1):
         # start moving
         self.get_logger().info('In Start Mover')
         twist = Twist()
-        twist.linear.x = speedchange
+        twist.linear.x = speedchange*modifier
         twist.angular.z = 0.0
         # not sure if this is really necessary, but things seem to work more
         # reliably with this
@@ -358,8 +363,8 @@ class AutoNav(Node):
         self.get_logger().info('In adjust wall')
         twist = Twist()
         twist.linear.x = 0.0
-        diff_checker = 0.004
-        speed_change = 0.5
+        diff_checker = 0.003
+        speed_change = 0.3
         
         if self.wall =="left":
             l1 = 60
@@ -373,31 +378,36 @@ class AutoNav(Node):
         a1 = self.laser_range[l1]
         a2 = self.laser_range[l2]
         diff = a1 - a2
-        self.get_logger().info('Adjusting to %s wall, diff = %f, angle 45 = %f, angle 135 = %f' % (self.wall, diff, a1, a2))
+        self.get_logger().info('Adjusting to %s wall, diff = %f, angle 60 = %f, angle 120 = %f' % (self.wall, diff, a1, a2))
         
         if diff > diff_checker:
-            twist.angular.z = speed_change*rotatechange #Rotate Clockwise
-            self.publisher_.publish(twist)
+            #twist.angular.z = -speed_change*rotatechange #(-)Rotate Clockwise
+            #self.publisher_.publish(twist)
             self.get_logger().info('Adjusting Robot to wall')
             while diff > diff_checker:
+                self.rotatebot(-0.5, 0.3)
+                time.sleep(0.2)
                 rclpy.spin_once(self)
                 a1= self.laser_range[l1]
                 a2= self.laser_range[l2]
                 diff = a1 - a2
-                self.get_logger().info('diff = %f, angle 45 = %f, angle 135 = %f' % (diff, a1, a2))
+                self.get_logger().info('diff = %f, angle 60 = %f, angle 120 = %f' % (diff, a1, a2))
             twist.angular.z = 0.0
             self.publisher_.publish(twist)
             
         elif diff < -diff_checker:
-            twist.angular.z = -speed_change*rotatechange
-            self.publisher_.publish(twist)
+            #twist.angular.z = speed_change*rotatechange
+            #self.publisher_.publish(twist)
             self.get_logger().info('Adjusting Robot to wall')
             while diff < -diff_checker:
+                self.rotatebot(0.5, 0.3)
+                time.sleep(0.2)
                 rclpy.spin_once(self)
                 a1= self.laser_range[l1]
                 a2= self.laser_range[l2]
                 diff = a1 - a2
-                self.get_logger().info('diff = %f, angle 45 = %f, angle 135 = %f' % (diff, a1, a2))
+                self.get_logger().info('diff = %f, angle 60 = %f, angle 120 = %f' % (diff, a1, a2))
+                time.sleep(0.2)
             twist.angular.z = 0.0
             self.publisher_.publish(twist)
 # --------------------------------------------        
@@ -464,30 +474,32 @@ class AutoNav(Node):
 #                 twist.angular.z = 0.0
 #                 self.publisher_.publish(twist)
                 
-    def follow_wall(self):
+    def follow_wall(self):     
         for _ in range(5):
             rclpy.spin_once(self)
             time.sleep(0.5)
             print(self.laser_range)
             print(self.nfc)
         
+        self.rotatebot(10)
         self.get_logger().info('In follow_wall')
         self.follow = True 
         rotate = -1
         num_of_turn = 0
-        
         self.check_wall(1.0)
-        
         if self.wall == "right":
             rotate = 1
-         
-        
+    
         while num_of_turn <= 3:
             self.adjust_wall()
-            self.start_move()
+            self.start_move(0.7)
             self.mover()
             self.rotatebot(rotate*90)
             num_of_turn += 1
+            
+            servo = Int8()
+            servo.data = 0
+            self.publisher_servo.publish(servo)
         
         self.follow = False
         self.start_move()

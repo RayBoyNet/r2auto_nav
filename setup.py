@@ -26,10 +26,8 @@ setup(
             'r2occupancy = auto_nav.r2occupancy:main',
             'r2occupancy2 = auto_nav.r2occupancy2:main',
             'r2auto_nav = auto_nav.r2auto_nav:main',
-            'E3 = auto_nav.NFC_Pub:main',
             'nfc_auto_nav = auto_nav.NFC_auto_nav:main',
-            'test_nav = auto_nav.test_nav:main',
-            'b_nav = auto_nav.bounce_test:main',
+            'a_nav = auto_nav.auto_nav:main',
         ],
     },
 )
