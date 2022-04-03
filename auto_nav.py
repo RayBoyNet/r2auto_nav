@@ -21,7 +21,7 @@ from std_msgs.msg import Int8
 rotatechange = 0.10
 speedchange = 0.18
 occ_bins = [-1, 0, 100, 101]
-stop_distance = 0.25
+stop_distance = 0.30
 front_angle = 30
 front_angles = range(-front_angle,front_angle+1,1)
 pick_angle = 90
@@ -101,6 +101,12 @@ class AutoNav(Node):
             self.nfc_callback,
             1)
         
+        self.ir_subscription = self.create_subscription(
+            Int8,
+            'IRsensor',
+            self.ir_callback,
+            1)
+        
         self.nfc = False
         self.sleep = 5
         self.wall = None
@@ -110,6 +116,19 @@ class AutoNav(Node):
         self.nfc = msg.data
         if self.nfc:
             self.get_logger().info('NFC detected!')
+            
+    def ir_callback(self, msg):
+        if msg.data == 2: #2 Nothing detected, -1 turn left, 0 straight ahead, 1 turn right
+            self.ir_msg = False
+        elif msg.data == -1:
+            self.ir_msg = "left"
+        elif msg.data == 0:
+            self.ir_msg = "straight"
+        elif msg.data == 1:
+            self.ir_msg = "right"
+            
+        if self.ir_msg: 
+            self.get_logger().info('Hot Target detected!')
             
     
     def odom_callback(self, msg):
@@ -248,35 +267,36 @@ class AutoNav(Node):
         twist.angular.z = 0.0
         # time.sleep(1)
         self.publisher_.publish(twist)
-                        
-                    
+
+              
     def mover(self):
         self.get_logger().info('In Mover')
+        back_angles = range(179,182,1)
         try:
-            # initialize variable to write elapsed time to file
-            # contourCheck = 1
-
-            # find direction with the largest distance from the Lidar,
-            # rotate to that direction, and start moving
-
             while rclpy.ok():
                 if self.laser_range.size != 0:
-                    # check distances in front of TurtleBot and find values less
-                    # than stop_distance
                     lri = (self.laser_range[front_angles]<float(stop_distance)).nonzero()
-                    # self.get_logger().info('Distances: %s' % str(lri))
-
-                    # if the list is not empty    
-                    if(len(lri[0])>0):
-                        # stop moving
+                    lrb = (self.laser_range[back_angles]>float(2.5)).nonzero()
+                    
+                    if (len(lrb[0])>0) and self.spin:
                         self.stopbot()
-                        if not self.follow:
-                            self.check_wall(30)
+                        self.get_logger().info('Spinning to map arena')
+                        self.rotatebot(90,2)
+                        self.rotatebot(-90,2)
+                        self.adjust_wall()
+                        self.start_move(0.7)
+                        self.spin = False
+                        continue
+                        
+                    if(len(lri[0])>0):
+                        self.stopbot()
+                        if not self.follow_wall:
+                            self.check_wall(stop_distance+0.1)
                             self.bouncebot()
-                        elif self.follow:
+                        elif self.follow_wall:
+                            print(self.laser_range.size)
                             return None
                     
-                    #self.get_logger().info('NFC Data %s' % str(self.nfc))
                     if not self.nfc_found and self.nfc:
                         self.nfc_found = True
                         self.get_logger().info('Stopping robot from moving for %d seconds' % self.sleep)
@@ -285,6 +305,12 @@ class AutoNav(Node):
                         self.get_logger().info('Resuming mover now!')
                         self.start_move()
                         continue
+                    
+                    if self.ir_msg and not self.follow_wall and self.nfc_found:
+                        self.get_logger().info('Stopping robot from moving')
+                        self.stopbot()
+                        self.ir_mover()
+                        
                     
                 # allow the callback functions to run
                 rclpy.spin_once(self)
@@ -324,19 +350,7 @@ class AutoNav(Node):
                 self.mover()
                 
     
-    def first_rotate(self):
-        twist = Twist()
-        twist.linear.x = 0.0
-        twist.angular.z = 1*rotatechange
-        self.publisher_.publish(twist)
-        print("here")
-        time.sleep(2.5)
-        twist.angular.z = 0.0
-        self.publisher_.publish(twist)
-        print("here")
-        
-        
-    def check_wall(self, dist):
+    def check_wall(self, dist=stop_distance+0.1):
         self.get_logger().info('In checkwall')
         #self.get_logger().info('Laser size: %d' % self.laser_range.size)
         
@@ -367,8 +381,8 @@ class AutoNav(Node):
         speed_change = 0.3
         
         if self.wall =="left":
-            l1 = 60
-            l2 = 120
+            l1 = 120
+            l2 = 60
             speed_change = -speed_change
             
         elif self.wall =="right":
@@ -380,130 +394,107 @@ class AutoNav(Node):
         diff = a1 - a2
         self.get_logger().info('Adjusting to %s wall, diff = %f, angle 60 = %f, angle 120 = %f' % (self.wall, diff, a1, a2))
         
-        if diff > diff_checker:
-            #twist.angular.z = -speed_change*rotatechange #(-)Rotate Clockwise
-            #self.publisher_.publish(twist)
-            self.get_logger().info('Adjusting Robot to wall')
-            while diff > diff_checker:
-                self.rotatebot(-0.5, 0.3)
-                time.sleep(0.2)
-                rclpy.spin_once(self)
-                a1= self.laser_range[l1]
-                a2= self.laser_range[l2]
-                diff = a1 - a2
-                self.get_logger().info('diff = %f, angle 60 = %f, angle 120 = %f' % (diff, a1, a2))
-            twist.angular.z = 0.0
+        while diff > diff_checker or diff < -diff_checker:
+            if diff > diff_checker:
+                dirc = -0.3
+            elif diff < diff_checker:
+                dirc = 0.3
+            # self.rotatebot(dirc*0.5, 0.3)
+            # time.sleep(0.3)
+            twist.angular.z = dirc * rotatechange
             self.publisher_.publish(twist)
+            rclpy.spin_once(self)
+            a1= self.laser_range[l1]
+            a2= self.laser_range[l2]
+            diff = a1 - a2
+            self.get_logger().info('diff = %f, angle 60 = %f, angle 120 = %f' % (diff, a1, a2))
+        twist.angular.z = 0.0
+        self.publisher_.publish(twist)
+        
+        # while diff > diff_checker :
+        #     self.rotatebot(-0.5, 0.3)
+        #     time.sleep(0.2)
+        #     rclpy.spin_once(self)
+        #     a1= self.laser_range[l1]
+        #     a2= self.laser_range[l2]
+        #     diff = a1 - a2
+        #     self.get_logger().info('diff = %f, angle 60 = %f, angle 120 = %f' % (diff, a1, a2))
+        # twist.angular.z = 0.0
+        # self.publisher_.publish(twist)
             
-        elif diff < -diff_checker:
-            #twist.angular.z = speed_change*rotatechange
-            #self.publisher_.publish(twist)
-            self.get_logger().info('Adjusting Robot to wall')
-            while diff < -diff_checker:
-                self.rotatebot(0.5, 0.3)
-                time.sleep(0.2)
-                rclpy.spin_once(self)
-                a1= self.laser_range[l1]
-                a2= self.laser_range[l2]
-                diff = a1 - a2
-                self.get_logger().info('diff = %f, angle 60 = %f, angle 120 = %f' % (diff, a1, a2))
-                time.sleep(0.2)
-            twist.angular.z = 0.0
-            self.publisher_.publish(twist)
-# --------------------------------------------        
-#         if self.wall == "left":
-#             angle_45 = self.laser_range[60]
-#             angle_135 = self.laser_range[120]
-#             diff = angle_45 - angle_135
-#             self.get_logger().info('Adjusting to left wall, diff = %f, angle 45 = %f, angle 135 = %f' % (diff, angle_45, angle_135))
-            
-#             if diff > diff_checker:
-#                 twist.angular.z = -speed_change*rotatechange #Rotate Clockwise
-#                 self.publisher_.publish(twist)
-#                 self.get_logger().info('Adjusting Robot to wall')
-#                 while diff > diff_checker:
-#                     rclpy.spin_once(self)
-#                     angle_45 = self.laser_range[60]
-#                     angle_135 = self.laser_range[120]
-#                     diff = angle_45 - angle_135
-#                     self.get_logger().info('diff = %f, angle 45 = %f, angle 135 = %f' % (diff, angle_45, angle_135))
-#                 twist.angular.z = 0.0
-#                 self.publisher_.publish(twist)
-#             elif diff < -diff_checker:
-#                 twist.angular.z = speed_change*rotatechange
-#                 self.publisher_.publish(twist)
-#                 self.get_logger().info('Adjusting Robot to wall')
-#                 while diff < -diff_checker:
-#                     angle_45 = self.laser_range[60]
-#                     angle_135 = self.laser_range[120]
-#                     rclpy.spin_once(self)
-#                     diff = angle_45 - angle_135
-#                     self.get_logger().info('diff = %f, angle 45 = %f, angle 135 = %f' % (diff, angle_45, angle_135))
-#                 twist.angular.z = 0.0
-#                 self.publisher_.publish(twist)
+        # while diff < -diff_checker:
+        #     self.rotatebot(0.5, 0.3)
+        #     time.sleep(0.2)
+        #     rclpy.spin_once(self)
+        #     a1= self.laser_range[l1]
+        #     a2= self.laser_range[l2]
+        #     diff = a1 - a2
+        #     self.get_logger().info('diff = %f, angle 60 = %f, angle 120 = %f' % (diff, a1, a2))
+        #     time.sleep(0.2)
+        # twist.angular.z = 0.0
+        # self.publisher_.publish(twist)
 
-#         elif self.wall == "right":
-#             angle_45 = self.laser_range[300]
-#             angle_135 = self.laser_range[240]
-            
-#             diff = angle_45 - angle_135
-#             self.get_logger().info('Adjusting to wall, diff = %f, angle 45 = %f, angle 135 = %f' % (diff, angle_45, angle_135))
-            
-#             if diff > diff_checker:
-#                 twist.angular.z = speed_change*rotatechange
-#                 self.publisher_.publish(twist)
-#                 self.get_logger().info('Adjusting Robot to wall')
-#                 while diff > diff_checker:
-#                     rclpy.spin_once(self)
-#                     angle_45 = self.laser_range[300]
-#                     angle_135 = self.laser_range[240]
-#                     diff = angle_45 - angle_135
-#                     self.get_logger().info('diff = %f, angle 45 = %f, angle 135 = %f' % (diff, angle_45, angle_135))
-#                 twist.angular.z = 0.0
-#                 self.publisher_.publish(twist)
-#             elif diff < -diff_checker:
-#                 twist.angular.z = -speed_change*rotatechange
-#                 self.publisher_.publish(twist)
-#                 self.get_logger().info('Adjusting Robot to wall')
-#                 while diff < -diff_checker:
-#                     rclpy.spin_once(self)
-#                     angle_45 = self.laser_range[300]
-#                     angle_135 = self.laser_range[240]
-#                     diff = angle_45 - angle_135
-#                     self.get_logger().info('diff = %f, angle 45 = %f, angle 135 = %f' % (diff, angle_45, angle_135))
-#                 twist.angular.z = 0.0
-#                 self.publisher_.publish(twist)
                 
     def follow_wall(self):     
         for _ in range(5):
             rclpy.spin_once(self)
             time.sleep(0.5)
-            print(self.laser_range)
-            print(self.nfc)
+            print(self.laser_range.size)
+        self.rotatebot(5)
         
-        self.rotatebot(10)
         self.get_logger().info('In follow_wall')
-        self.follow = True 
+        self.follow_wall = True 
         rotate = -1
         num_of_turn = 0
         self.check_wall(1.0)
+        
         if self.wall == "right":
             rotate = 1
-    
+            
         while num_of_turn <= 3:
+            self.spin = True
             self.adjust_wall()
             self.start_move(0.7)
             self.mover()
-            self.rotatebot(rotate*90)
+            if num_of_turn != 3:
+                self.rotatebot(rotate*90)
             num_of_turn += 1
-            
-            servo = Int8()
-            servo.data = 0
-            self.publisher_servo.publish(servo)
         
-        self.follow = False
+        self.follow_wall = False
         self.start_move()
         self.mover()
+        
+
+    def ir_mover(self):
+        self.get_logger().info('In IR_mover')
+        shoot_distance = 40
+        
+        while self.ir_msg == "left":
+            self.rotatebot(0.5, 0.3)
+            time.sleep(0.2)
+            rclpy.spin_once(self)
+        while self.ir_msg == "right":
+            self.rotatebot(-0.5, 0.3)
+            time.sleep(0.2)
+            rclpy.spin_once(self)
+            
+        if self.ir_msg == "straight":
+            self.get_logger().info('Moving forwards to target')
+            self.start_move()
+
+        while rclpy.ok():
+            if self.laser_range.size != 0:
+                lri = (self.laser_range[front_angles]<float(shoot_distance)).nonzero()
+                if(len(lri[0])>0):
+                    self.stopbot()
+                    self.actuate_servo()   
+            rclpy.spin_once(self)
+                    
+                    
+    def actuate_servo(self):
+        servo = Int8()
+        servo.data = 1
+        self.publisher_servo.publish(servo)
             
         
         

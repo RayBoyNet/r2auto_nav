@@ -28,6 +28,7 @@ setup(
             'r2auto_nav = auto_nav.r2auto_nav:main',
             'nfc_auto_nav = auto_nav.NFC_auto_nav:main',
             'a_nav = auto_nav.auto_nav:main',
+            'nav = auto_nav.follow_wall:main',
         ],
     },
 )
