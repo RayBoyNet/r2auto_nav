@@ -50,9 +50,10 @@ class AutoNav(Node):
     def __init__(self):
         super().__init__('auto_nav')
         
-        self.nfc = False
+        self.nfc_msg = False
         self.nfc_found = False
         self.sleep = 10
+        self.shot_balls = False
 
         # create publisher for moving TurtleBot
         self.publisher_ = self.create_publisher(Twist, 'cmd_vel', 10)
@@ -107,20 +108,20 @@ class AutoNav(Node):
 
 
     def nfc_callback(self, msg):
-        self.nfc = msg.data
-        if self.nfc:
+        self.nfc_msg = msg.data
+        if self.nfc_msg:
             self.get_logger().info('NFC detected!')
 
     def ir_callback(self, msg):
-        if msg.data == 2:  # 2 Nothing detected, -1 turn left, 0 straight ahead, 1 turn right
+        if msg.data == 3:  # 2 Nothing detected, -1 turn left, 0 straight ahead, 1 turn right
             self.ir_msg = False
-        elif msg.data == -1:
-            self.ir_msg = "left"
+        elif msg.data == 2:
+            self.ir_msg = "forward"
         elif msg.data == 0:
-            self.ir_msg = "straight"
+            self.ir_msg = "middle"
         elif msg.data == 1:
-            self.ir_msg = "right"
-
+            self.ir_msg = "backward"
+            
         if self.ir_msg:
             self.get_logger().info('Hot Target detected!')
 
@@ -227,7 +228,7 @@ class AutoNav(Node):
             # get the sign to see if we can stop
             c_dir_diff = np.sign(c_change.imag)
             # self.get_logger().info('c_change_dir: %f c_dir_diff: %f' % (c_change_dir, c_dir_diff))
-            if not self.nfc_found and self.nfc:
+            if not self.nfc_found and self.nfc_msg:
                 self.nfc_found = True
                 self.get_logger().info('Stopping robot from rotating for %d seconds' % self.sleep)
                 self.stop()
@@ -243,7 +244,7 @@ class AutoNav(Node):
         self.publisher_.publish(twist)
         
     def check_nfc(self):
-        if not self.nfc_found and self.nfc:
+        if not self.nfc_found and self.nfc_msg:
             self.nfc_found = True
             self.get_logger().info('Stopping robot from moving for %d seconds' % self.sleep)
             self.stop()
@@ -252,37 +253,50 @@ class AutoNav(Node):
             
             
     def actuate_servo(self):
-        servo = Int8()
-        servo.data = 1
-        self.publisher_servo.publish(servo)
+        servo_msg = Int8()
+        servo_msg.data = 1
+        self.publisher_servo.publish(servo_msg)
         
-    
-    def ir_mover(self):
-        self.get_logger().info('In IR_mover')
-        shoot_distance = 0.40
-        front_angle = 30
-        front_angles = range(-front_angle,front_angle+1,1)
+    def adjust_to_target(self):
+        speed = 0.005
         
-        while self.ir_msg == "left":
-            self.rotatebot(0.5, 0.3)
-            time.sleep(0.2)
+        while self.ir_msg != 'middle':
+            twist = Twist()
+            twist.angular.z = 0
+            if self.ir_msg == 'forward':
+                twist.linear.x = speed
+            elif self.ir_msg == 'backward':
+                twist.linear.x = -speed
+            self.publisher_.publish(twist)
             rclpy.spin_once(self)
-        while self.ir_msg == "right":
-            self.rotatebot(-0.5, 0.3)
-            time.sleep(0.2)
-            rclpy.spin_once(self)
-            
-        if self.ir_msg == "straight":
-            self.get_logger().info('Moving forwards to target')
-            self.moveForward()
+        self.stop()
+        
+    def check_ir(self):
+        #self.get_logger().info('Checking IR')
+        if self.ir_msg and not self.shot_balls:
+            self.stop()
+            shoot_distance = 0.30 
+            self.adjust_to_target()
 
-        while rclpy.ok():
-            if self.laser_range.size != 0:
-                lri = (self.laser_range[front_angles]<float(shoot_distance)).nonzero()
-                if(len(lri[0])>0):
-                    self.stopbot()
-                    self.actuate_servo()   
-            rclpy.spin_once(self)
+            while np.nanmin(self.laser_range[range(265, 275, 1)]) < shoot_distance:
+                twist = Twist()
+                twist.angular.z = 0.0
+                self.rotatebot(-15)
+                twist.linear.x = -0.05
+                self.publisher_.publish(twist)
+                time.sleep(2)
+                self.stop()
+                self.rotatebot(15)
+                twist.linear.x = 0.05
+                self.publisher_.publish(twist)
+                time.sleep(2)
+                self.stop()
+                
+            self.adjust_to_target()
+            self.rotatebot(-90)
+            self.actuate_servo()
+            time.sleep(8)
+            self.rotatebot(90)
 
 
     def followWall(self):
@@ -301,90 +315,85 @@ class AutoNav(Node):
         twist = Twist()
 
         # Execute the movement when the robot is active
-        while rclpy.ok():
-            self.check_nfc()
-            # define the variable to determine the existance of the right wall
-            no_right_wall = None
-            # define the variable to determine the existance of the front wall
-            no_front_wall = None
-
-            # read the input distance between robot and obstacles in the
-            # front, left, right, top left, and top right direction
-            front = self.laser_range[1]
-            left = self.laser_range[90]
-            top_left = self.laser_range[45]
-            right = self.laser_range[270]
-            top_right = self.laser_range[315]
-            closest_right = np.nanmin(self.laser_range[range(260, 280, 1)])
-            self.get_logger().info('Front = %f' % front)
-            self.get_logger().info('Left = %f' % left)
-            self.get_logger().info('top_left = %f' % top_left)
-            self.get_logger().info('right = %f' % right)
-            self.get_logger().info('top_right = %f' % top_right)
-
-            if right< 0.35 or top_right <0.5:
-                no_right_wall = False  # False becuase right wall is detected
-                print('Right wall is detected')  # display message
-
-            else:
-                no_right_wall = True  # True becuase right wall is not detected
-                print('Right wall is not detected')  # display message
-
-            if front < 0.35:
-                no_front_wall = False
-                print('Front wall is detected')
-            else:
-                no_front_wall = True
-                print('Front wall is not detected')
-
-            if no_right_wall:
-                if front < 0.3 or top_left < 0.42:
-                    self.moveBackward(speed)
-                    while front < 0.4 and rclpy.ok():
-                        front = self.laser_range[1]
-                        rclpy.spin_once(self)
-                    self.stop()
-
-                if right > min_follow_dist:
-                    twist.linear.x = 0.001
+        try:
+            while rclpy.ok():
+                # define the variable to determine the existance of the right wall
+                no_right_wall = None
+                # define the variable to determine the existance of the front wall
+                no_front_wall = None
+    
+                # read the input distance between robot and obstacles in the
+                # front, left, right, top left, and top right direction
+                front = self.laser_range[1]
+                front_left = self.laser_range[10]
+                front_right = self.laser_range[350]
+                top_left = self.laser_range[45]
+                right = self.laser_range[270]
+                top_right = self.laser_range[315]
+                closest_right = np.nanmin(self.laser_range[range(260, 280, 1)])
+                self.get_logger().info('Front = %f' % front)
+                self.get_logger().info('Front_left = %f' % front_left)
+                self.get_logger().info('Front_)right = %f' % front_right)
+                self.get_logger().info('top_left = %f' % top_left)
+                self.get_logger().info('right = %f' % right)
+                self.get_logger().info('top_right = %f' % top_right)
+                
+                self.check_nfc()
+                self.check_ir()
+    
+                if right< 0.35 or top_right <0.5:
+                    no_right_wall = False  # False becuase right wall is detected
+                    print('Right wall is detected')  # display message
+    
                 else:
-                    twist.linear.x = 0.002
-                twist.angular.z = -0.5
-                self.publisher_.publish(twist)
-
-            elif not no_right_wall and no_front_wall:
-                t_right = 1.414 * right
-                twist.linear.x = speed
-                twist.angular.z = 0.0
-                if (top_right < t_right - threshhold) or closest_right < min_follow_dist-0.05:
-                    print(closest_right)
-                    twist.angular.z = r_speed
-                elif top_right > t_right + threshhold or closest_right > min_follow_dist + 0.15:
-                    twist.angular.z = -r_speed
-                self.publisher_.publish(twist)
-
-                # if right > min_follow_dist + 0.10:
-                #     self.stop()
-                #     lri = np.nanargmin((self.laser_range[range(260, 280, 1)]))
-                #     angle = 100-lri
-                #     self.rotatebot(-angle)
-                #     self.moveForward(speed)
-                #     while front > min_follow_dist:
-                #         front = np.nanmin(self.laser_range[range(340, 360, 1)])
-                #         rclpy.spin_once(self)
-                #     self.stop()
-                #     self.rotatebot(angle)
-
-
-            elif not no_right_wall and not no_front_wall:
-                if closest_right < min_follow_dist or front < 0.4 or top_right < 0.4:
-                    twist.linear.x = 0.0
+                    no_right_wall = True  # True becuase right wall is not detected
+                    print('Right wall is not detected')  # display message
+    
+                if front < 0.35 or front_left < 0.35 or front_right <0.35:
+                    no_front_wall = False
+                    print('Front wall is detected')
                 else:
-                    twist.linear.x = 0.002
-                twist.angular.z = 0.5
-                self.publisher_.publish(twist)
-
-            rclpy.spin_once(self)
+                    no_front_wall = True
+                    print('Front wall is not detected')
+    
+                if no_right_wall:
+                    if front < 0.3 or top_left < 0.42:
+                        self.moveBackward(speed)
+                        while front < 0.4 and rclpy.ok():
+                            front = self.laser_range[1]
+                            rclpy.spin_once(self)
+                        self.stop()
+    
+                    if right > min_follow_dist:
+                        twist.linear.x = 0.001
+                    else:
+                        twist.linear.x = 0.002
+                    twist.angular.z = -0.5
+                    self.publisher_.publish(twist)
+    
+                elif not no_right_wall and no_front_wall:
+                    t_right = 1.414 * right
+                    twist.linear.x = speed
+                    twist.angular.z = 0.0
+                    if (top_right < t_right - threshhold) or closest_right < min_follow_dist-0.05:
+                        print(closest_right)
+                        twist.angular.z = r_speed
+                    elif top_right > t_right + threshhold or closest_right > min_follow_dist + 0.15:
+                        twist.angular.z = -r_speed
+                    self.publisher_.publish(twist)
+    
+                elif not no_right_wall and not no_front_wall:
+                    if closest_right < min_follow_dist or front < 0.4 or top_right < 0.4:
+                        twist.linear.x = 0.0
+                    else:
+                        twist.linear.x = 0.002
+                    twist.angular.z = 0.5
+                    self.publisher_.publish(twist)
+    
+                rclpy.spin_once(self)
+                
+        finally:
+            self.stop()
 
 
 def main(args=None):
